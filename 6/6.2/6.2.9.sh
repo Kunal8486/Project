@@ -1,72 +1,83 @@
 #!/bin/bash
 
-# Check the integrity of the root user's PATH
-echo "Checking root user's PATH integrity..."
+# Function to check PATH integrity
+check_path_integrity() {
+    local path="$1"
+    local issues_found=0
+    echo "Checking root user's PATH integrity..."
+
+    # Check for empty directories and trailing colons
+    if echo "$path" | grep -q "::"; then
+        echo "Warning: root's PATH contains an empty directory (::)"
+        issues_found=1
+    fi
+    if echo "$path" | grep -q ":$"; then
+        echo "Warning: root's PATH contains a trailing colon (:)"
+        issues_found=1
+    fi
+
+    # Check each directory in the PATH
+    IFS=':' read -r -a dirs <<< "$path"
+    for dir in "${dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            ls -ldH "$dir" | awk -v dir="$dir" -v issues_found="$issues_found" '
+            $9 == "." {print "Warning: PATH contains current working directory (.)"; issues_found=1}
+            $3 != "root" {print "Warning:", dir, "is not owned by root"; issues_found=1}
+            substr($1,6,1) != "-" {print "Warning:", dir, "is group writable"; issues_found=1}
+            substr($1,9,1) != "-" {print "Warning:", dir, "is world writable"; issues_found=1}
+            '
+        else
+            echo "Warning: $dir is not a directory"
+            issues_found=1
+        fi
+    done
+
+    return $issues_found
+}
+
+# Function to remediate issues
+remediate_path() {
+    local path="$1"
+    echo "Do you want to correct any issues found in root's PATH? (y/n): "
+    read -r choice
+
+    if [[ "$choice" == "y" ]]; then
+        IFS=':' read -r -a dirs <<< "$path"
+        for dir in "${dirs[@]}"; do
+            # Handle empty directories and trailing colons
+            if [ -d "$dir" ]; then
+                # Change ownership to root if not already owned by root
+                if [ "$(ls -ldH "$dir" | awk '{print $3}')" != "root" ]; then
+                    echo "Changing ownership of $dir to root..."
+                    chown root:root "$dir"
+                fi
+                
+                # Remove group write permission
+                if [ "$(ls -ldH "$dir" | awk '{print substr($1,6,1)}')" != "-" ]; then
+                    echo "Removing group write permission from $dir..."
+                    chmod g-w "$dir"
+                fi
+                
+                # Remove world write permission
+                if [ "$(ls -ldH "$dir" | awk '{print substr($1,9,1)}')" != "-" ]; then
+                    echo "Removing world write permission from $dir..."
+                    chmod o-w "$dir"
+                fi
+            fi
+        done
+        echo "Remediation completed."
+    else
+        echo "No changes were made to root's PATH."
+    fi
+}
 
 # Get the root user's PATH
 root_path="$(sudo -Hiu root env | grep '^PATH' | cut -d= -f2)"
+check_path_integrity "$root_path"
 
-# Check for empty directories and trailing colons
-if echo "$root_path" | grep -q "::"; then
-    echo "root's PATH contains an empty directory (::)"
-fi
-if echo "$root_path" | grep -q ":$"; then
-    echo "root's PATH contains a trailing colon (:)"
-fi
-
-# Check each directory in the PATH
-for dir in $(echo "$root_path" | tr ":" " "); do
-    if [ -d "$dir" ]; then
-        ls -ldH "$dir" | awk -v dir="$dir" '
-        $9 == "." {print "PATH contains current working directory (.)"}
-        $3 != "root" {print dir, "is not owned by root"}
-        substr($1,6,1) != "-" {print dir, "is group writable"}
-        substr($1,9,1) != "-" {print dir, "is world writable"}
-        '
-    else
-        echo "$dir is not a directory"
-    fi
-done
-
-# Remediation prompt
-read -p "Do you want to correct any issues found in root's PATH? (y/n): " choice
-
-if [[ "$choice" == "y" ]]; then
-    # Correct empty directories
-    if echo "$root_path" | grep -q "::"; then
-        echo "Removing empty directories from root's PATH..."
-        # Code to remove empty directories (this needs manual handling as the script cannot auto-modify the PATH)
-    fi
-    
-    # Correct trailing colon
-    if echo "$root_path" | grep -q ":$"; then
-        echo "Removing trailing colon from root's PATH..."
-        # Code to remove trailing colon (this needs manual handling as the script cannot auto-modify the PATH)
-    fi
-
-    # Correct permissions
-    for dir in $(echo "$root_path" | tr ":" " "); do
-        if [ -d "$dir" ]; then
-            # Change ownership to root if not already owned by root
-            if [ "$(ls -ldH "$dir" | awk '{print $3}')" != "root" ]; then
-                echo "Changing ownership of $dir to root..."
-                chown root:root "$dir"
-            fi
-            
-            # Remove group write permission
-            if [ "$(ls -ldH "$dir" | awk '{print substr($1,6,1)}')" != "-" ]; then
-                echo "Removing group write permission from $dir..."
-                chmod g-w "$dir"
-            fi
-            
-            # Remove world write permission
-            if [ "$(ls -ldH "$dir" | awk '{print substr($1,9,1)}')" != "-" ]; then
-                echo "Removing world write permission from $dir..."
-                chmod o-w "$dir"
-            fi
-        fi
-    done
-    echo "Remediation completed."
+# Check if any issues were found
+if [ $? -ne 0 ]; then
+    remediate_path "$root_path"
 else
-    echo "No changes were made to root's PATH."
+    echo "No issues found in root's PATH."
 fi

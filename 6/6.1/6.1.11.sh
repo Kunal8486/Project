@@ -34,6 +34,7 @@ audit_world_writable() {
         for file in "${a_file[@]}"; do
             echo " - $file"
         done
+        return 1  # Indicate audit failure
     else
         echo -e "\n- No world writable files exist on the local filesystem."
     fi
@@ -43,9 +44,12 @@ audit_world_writable() {
         for dir in "${a_dir[@]}"; do
             echo " - $dir"
         done
+        return 1  # Indicate audit failure
     else
         echo -e "\n- All world writable directories have the sticky bit set."
     fi
+
+    return 0  # Indicate audit success
 }
 
 # Function to remediate world writable files and directories
@@ -84,13 +88,18 @@ remediate_world_writable() {
 # Main script execution
 echo "Auditing world writable files and directories..."
 audit_world_writable
+audit_result=$?
 
-read -p "Do you want to remediate the findings (y/n)? " choice
-
-if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-    echo "Remediating..."
-    remediate_world_writable
-    echo "Remediation complete."
+# Prompt for remediation if audit failed
+if [ $audit_result -ne 0 ]; then
+    read -p "Do you want to remediate the findings (y/n)? " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+        echo "Remediating..."
+        remediate_world_writable
+        echo "Remediation complete."
+    else
+        echo "No changes were made."
+    fi
 else
-    echo "No changes were made."
+    echo "No remediation needed."
 fi
